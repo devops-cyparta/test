@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-deployment
+  labels:
+    app: flask
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask
+  template:
+    metadata:
+      labels:
+        app: flask
+    spec:
+      containers:
+      - name: flaskcontainer
+        image: maro4299311/flask_app
+        ports:
+        - containerPort: 8080
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-service
+spec:
+  type: NodePort
+  selector:
+    app: flask
+  ports:
+    - port: 8080
+      # By default and for convenience, the `targetPort` is set to
+      # the same value as the `port` field.
+      targetPort: 8080
+      # Optional field
+      # By default and for convenience, the Kubernetes control plane
+      # will allocate a port from a range (default: 30000-32767)
+      nodePort: 30004
