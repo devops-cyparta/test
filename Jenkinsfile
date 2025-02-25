@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        EXTERNAL_STORAGE = "/mnt/Storage/apps"
+        EXTERNAL_STORAGE = "/mnt/Storage"
     }
 
     stages {
@@ -15,10 +15,10 @@ pipeline {
                     def userPath = "${EXTERNAL_STORAGE}/${repoOwner}"
                     def repoPath = "${userPath}/${repoName}"
 
-                    // Ensure the repository path exists
+                    // Ensure the storage path exists
                     sh "mkdir -p ${repoPath}"
 
-                    // Clone or pull the latest changes
+                    // Clone or update the repo
                     sh """
                     if [ ! -d ${repoPath}/.git ]; then
                         git clone ${repoUrl} ${repoPath}
@@ -27,10 +27,18 @@ pipeline {
                     fi
                     """
 
-                    // Store repo details in environment variables
+                    // Count the number of commits (edit/update number)
+                    def buildNumber = sh(script: "cd ${repoPath} && git rev-list --count HEAD || echo 0", returnStdout: true).trim()
+
+                    // Store environment variables
                     env.REPO_PATH = repoPath
                     env.REPO_OWNER = repoOwner
                     env.REPO_NAME = repoName
+                    env.BUILD_NUMBER = buildNumber
+                    env.IMAGE_TAG = "${repoOwner}_${repoName}:v${buildNumber}"
+
+                    echo "✅ Repository cloned/updated at ${repoPath}"
+                    echo "📌 Build Number: ${buildNumber}"
                 }
             }
         }
@@ -38,55 +46,26 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    try {
-                        // Get the build number from Git, default to 0 if it fails
-                        def buildNumber = sh(
-                            script: "cd ${env.REPO_PATH} && git rev-list --count HEAD || echo 0",
-                            returnStdout: true
-                        ).trim()
-        
-                        if (buildNumber == "0") {
-                            error("❌ Failed to get build number. Make sure the repository is cloned properly.")
-                        }
-        
-                        def containerPort = 8000 + (buildNumber as Integer)
-                        env.CONTAINER_PORT = containerPort
-                        env.IMAGE_TAG = "${env.REPO_OWNER}_${env.REPO_NAME}:v${buildNumber}"
-        
-                        // Log important values
-                        echo "📌 Build Number: ${buildNumber}"
-                        echo "📌 Image Tag: ${env.IMAGE_TAG}"
-                        echo "📌 Container Port: ${env.CONTAINER_PORT}"
-        
-                        // Check if Dockerfile exists before attempting to build
-                        sh """
-                        cd ${env.REPO_PATH}
-                        if [ ! -f Dockerfile ]; then
-                            echo "❌ No Dockerfile found in ${env.REPO_PATH}. Skipping build."
-                            exit 1
-                        fi
-                        """
-        
-                        // Build the Docker image
-                        sh """
-                        cd ${env.REPO_PATH} &&
-                        docker build -t ${env.IMAGE_TAG} .
-                        """
-        
-                        echo "✅ Docker image ${env.IMAGE_TAG} built successfully!"
-        
-                    } catch (Exception e) {
-                        echo "🔥 Error: ${e.message}"
-                        error("❌ Build Docker Image stage failed.")
-                    }
+                    // Ensure Dockerfile exists
+                    sh """
+                    if [ ! -f ${env.REPO_PATH}/Dockerfile ]; then
+                        echo "❌ No Dockerfile found in ${env.REPO_PATH}. Skipping build."
+                        exit 1
+                    fi
+                    """
+
+                    // Build Docker image
+                    sh """
+                    cd ${env.REPO_PATH}
+                    docker build -t ${env.IMAGE_TAG} .
+                    """
+
+                    echo "✅ Docker image ${env.IMAGE_TAG} built successfully!"
                 }
             }
         }
 
         stage('Stop Old Container') {
-            when {
-                expression { env.IMAGE_TAG && env.IMAGE_TAG.trim() != '' }
-            }
             steps {
                 script {
                     sh """
@@ -98,22 +77,21 @@ pipeline {
         }
 
         stage('Run New Container') {
-            when {
-                expression { env.IMAGE_TAG && env.IMAGE_TAG.trim() != '' }
-            }
             steps {
                 script {
+                    def containerPort = 8000 + (env.BUILD_NUMBER as Integer)
+                    env.CONTAINER_PORT = containerPort
+
                     sh """
                     docker run -d --name ${env.REPO_OWNER}_${env.REPO_NAME} -p ${env.CONTAINER_PORT}:8000 ${env.IMAGE_TAG}
                     """
+
+                    echo "🚀 Running container on port ${env.CONTAINER_PORT}"
                 }
             }
         }
 
         stage('Clean Up Old Images') {
-            when {
-                expression { env.IMAGE_TAG && env.IMAGE_TAG.trim() != '' }
-            }
             steps {
                 script {
                     sh "docker image prune -f"
@@ -124,10 +102,11 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Container running on port ${env.CONTAINER_PORT}"
+            echo "✅ Deployment successful!"
         }
         failure {
             echo "❌ Deployment failed. Check logs."
         }
     }
 }
+
